@@ -230,6 +230,10 @@ async function updateUserPassword(id, newPassword) {
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, id]);
 }
 
+async function updateUserEmail(id, newEmail) {
+  await pool.query('UPDATE users SET email = $1 WHERE id = $2', [newEmail.toLowerCase().trim(), id]);
+}
+
 async function deleteUser(id) {
   await pool.query('DELETE FROM users WHERE id = $1', [id]);
 }
@@ -237,5 +241,5 @@ async function deleteUser(id) {
 module.exports = {
   pool,
   initDB, getState, setState,
-  initUsers, getUserByEmail, listUsers, createUser, updateUserPassword, deleteUser,
+  initUsers, getUserByEmail, listUsers, createUser, updateUserPassword, updateUserEmail, deleteUser,
 };

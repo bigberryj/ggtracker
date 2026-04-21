@@ -210,6 +210,8 @@ function UserAccounts({ state }) {
   const [newPassword, setNewPassword] = useStateUA('guides2026');
   const [resetTarget, setResetTarget] = useStateUA(null);
   const [resetPw, setResetPw] = useStateUA('');
+  const [editEmailTarget, setEditEmailTarget] = useStateUA(null);
+  const [newEmailVal, setNewEmailVal] = useStateUA('');
   const toast = useToast();
 
   const load = () => fetch('/api/users').then(r=>r.json()).then(setUsers).catch(()=>{});
@@ -267,6 +269,7 @@ function UserAccounts({ state }) {
               <td>{u.role === 'admin' ? <span className="chip brand">Admin</span> : <span className="chip muted">Parent</span>}</td>
               <td>
                 <div className="row gap-1">
+                  <button className="btn sm" onClick={() => { setEditEmailTarget(u); setNewEmailVal(u.email); }}>Edit email</button>
                   <button className="btn sm" onClick={() => { setResetTarget(u); setResetPw(''); }}>Reset password</button>
                   <button className="icon-btn" onClick={() => deleteUser(u.id)}><IconTrash size={14}/></button>
                 </div>
@@ -308,6 +311,25 @@ function UserAccounts({ state }) {
               <label className="label">Initial password</label>
               <input className="input" type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {editEmailTarget && (
+        <Modal open={true} onClose={() => setEditEmailTarget(null)} size="sm" title={`Change login email — ${personName(editEmailTarget.personId)}`}
+          footer={<><button className="btn" onClick={() => setEditEmailTarget(null)}>Cancel</button><button className="btn primary" onClick={async () => {
+            if (!newEmailVal || !newEmailVal.includes('@')) { toast('Enter a valid email'); return; }
+            const res = await fetch(`/api/users/${editEmailTarget.id}/email`, {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: newEmailVal }),
+            });
+            if (!res.ok) { const d = await res.json(); toast(d.error || 'Failed'); return; }
+            toast('Login email updated'); setEditEmailTarget(null); load();
+          }}>Save</button></>}>
+          <div className="field-row">
+            <label className="label">New login email</label>
+            <input className="input" type="email" value={newEmailVal} onChange={e => setNewEmailVal(e.target.value)} autoFocus />
+            <div className="help">This is the email address used to sign in.</div>
           </div>
         </Modal>
       )}

@@ -215,6 +215,18 @@ app.put('/api/users/:id/password', requireAdmin, async (req, res) => {
   }
 });
 
+app.put('/api/users/:id/email', requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
+    await db.updateUserEmail(req.params.id, email);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Email already in use' });
+    res.status(500).json({ error: 'Failed to update email' });
+  }
+});
+
 app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   try {
     await db.deleteUser(req.params.id);
