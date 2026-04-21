@@ -6,6 +6,7 @@ function AdminEvents({ state, setState, navigate, tweaks, initialAction }) {
   const [filter, setFilter] = useStateE('upcoming'); // upcoming | past | all
   const [view, setView] = useStateE('list'); // list | calendar
   const [editing, setEditing] = useStateE(initialAction === 'new' ? {} : null);
+  const [showPaymentFlow, setShowPaymentFlow] = useStateE(false);
 
   const events = useMemoE(() => {
     return state.events.filter(e => {
@@ -72,6 +73,7 @@ function AdminEvents({ state, setState, navigate, tweaks, initialAction }) {
         </div>
         <div className="row gap-2">
           <button className="btn" onClick={() => {}}><IconFileDown size={14} /> Export CSV</button>
+          <button className="btn" onClick={() => setShowPaymentFlow(true)}><IconWallet size={14} /> Record payment</button>
           <button className="btn primary" onClick={() => setEditing({})}><IconPlus size={16} /> New event</button>
         </div>
       </div>
@@ -174,6 +176,7 @@ function AdminEvents({ state, setState, navigate, tweaks, initialAction }) {
       )}
 
       {editing && <EventEditor event={editing} state={state} onSave={onSave} onClose={() => setEditing(null)} onDelete={onDelete} />}
+      {showPaymentFlow && <RecordPaymentFlowModal state={state} setState={setState} onClose={() => setShowPaymentFlow(false)} />}
     </div>
   );
 }

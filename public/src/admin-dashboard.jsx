@@ -1,7 +1,8 @@
 // Admin — Dashboard
-const { useMemo: useMemoAD } = React;
+const { useMemo: useMemoAD, useState: useStateAD } = React;
 
 function AdminDashboard({ state, setState, navigate }) {
+  const [showPaymentFlow, setShowPaymentFlow] = useStateAD(false);
   const stats = useMemoAD(() => {
     const upcoming = state.events.filter(e => e.status === 'upcoming');
     const totalOwed = state.payments
@@ -157,6 +158,7 @@ function AdminDashboard({ state, setState, navigate }) {
             <h3>Quick actions</h3>
           </div>
           <div className="card-body stack gap-3">
+            <QuickAction icon={<IconWallet />} title="Record a payment" desc="Pick event, choose families, apply deposits or full payments" onClick={() => setShowPaymentFlow(true)} highlight />
             <QuickAction icon={<IconPlus />} title="Create an event" desc="Set price, deposit, assign families" onClick={() => navigate('events', null, 'new')} />
             <QuickAction icon={<IconUsers />} title="Add a parent" desc="Create login, link children" onClick={() => navigate('roster', null, 'new-parent')} />
             <QuickAction icon={<IconMail />} title="Send event email" desc="Notify assigned families" onClick={() => navigate('events')} />
@@ -165,13 +167,17 @@ function AdminDashboard({ state, setState, navigate }) {
         </div>
       </div>
     </div>
+
+    {showPaymentFlow && (
+      <RecordPaymentFlowModal state={state} setState={setState} onClose={() => setShowPaymentFlow(false)} />
+    )}
   );
 }
 
-function QuickAction({ icon, title, desc, onClick }) {
+function QuickAction({ icon, title, desc, onClick, highlight }) {
   return (
-    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: 'var(--cream-50)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
-      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--brand-100)', color: 'var(--brand-700)', display: 'grid', placeItems: 'center' }}>{icon}</div>
+    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: highlight ? 'var(--brand-50)' : 'var(--cream-50)', border: `1px solid ${highlight ? 'var(--brand-200)' : 'var(--border)'}`, borderRadius: 'var(--r-md)', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: highlight ? 'var(--brand-600)' : 'var(--brand-100)', color: highlight ? 'white' : 'var(--brand-700)', display: 'grid', placeItems: 'center' }}>{icon}</div>
       <div>
         <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--ink-900)' }}>{title}</div>
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{desc}</div>
