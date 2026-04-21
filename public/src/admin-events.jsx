@@ -109,12 +109,17 @@ function AdminEvents({ state, setState, navigate, tweaks, initialAction }) {
                       <IconUsers size={14} style={{ color: 'var(--text-muted)' }} />
                       <span style={{ fontSize: 13 }}>{ev.assigned.length} families</span>
                     </div>
-                    {ev.price > 0 ? (
-                      <div className="row gap-2">
-                        <span className="num" style={{ fontSize: 13, fontWeight: 600 }}>${collected}</span>
-                        <span className="muted" style={{ fontSize: 12 }}>/ ${total}</span>
-                      </div>
-                    ) : <span className="chip muted">Free</span>}
+                    <div className="row gap-2" style={{ marginLeft: 'auto' }}>
+                      {ev.price > 0 ? (
+                        <div className="row gap-2">
+                          <span className="num" style={{ fontSize: 13, fontWeight: 600 }}>${collected}</span>
+                          <span className="muted" style={{ fontSize: 12 }}>/ ${total}</span>
+                        </div>
+                      ) : <span className="chip muted">Free</span>}
+                      <button className="icon-btn" style={{ padding: 4 }} onClick={(e) => { e.stopPropagation(); setEditing(ev); }} title="Edit event">
+                        <IconEdit size={14} />
+                      </button>
+                    </div>
                   </>
                 }
               />

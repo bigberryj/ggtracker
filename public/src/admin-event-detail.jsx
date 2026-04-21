@@ -7,7 +7,26 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
   const [recordingPayment, setRecordingPayment] = useStateED(null);
   const [messageText, setMessageText] = useStateED('');
   const [bulkReminding, setBulkReminding] = useStateED(false);
+  const [editing, setEditing] = useStateED(false);
   const toast = useToast();
+
+  const onSave = (ev) => {
+    setState(s => {
+      const idx = s.events.findIndex(x => x.id === ev.id);
+      if (idx < 0) return s;
+      const events = [...s.events];
+      events[idx] = { ...s.events[idx], ...ev };
+      return { ...s, events };
+    });
+    setEditing(false);
+    toast('Event updated');
+  };
+
+  const onDelete = (ev) => {
+    if (!confirm(`Delete "${ev.title}"?`)) return;
+    setState(s => ({ ...s, events: s.events.filter(e => e.id !== ev.id), payments: s.payments.filter(p => p.eventId !== ev.id) }));
+    navigate('events');
+  };
 
   if (!event) return <div className="empty">Event not found. <button className="btn" onClick={() => navigate('events')}>Back</button></div>;
 
@@ -86,7 +105,7 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
             <div className="row gap-2">
               <button className="btn" onClick={() => printEventAdmin(event, state)}><IconPrinter size={14} /> Print</button>
               <button className="btn"><IconMail size={14} /> Email families</button>
-              <button className="btn primary"><IconEdit size={14} /> Edit event</button>
+              <button className="btn primary" onClick={() => setEditing(true)}><IconEdit size={14} /> Edit event</button>
             </div>
           </div>
           {event.price > 0 && (
@@ -268,6 +287,8 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
           </div>
         </div>
       )}
+
+      {editing && <EventEditor event={event} state={state} onSave={onSave} onClose={() => setEditing(false)} onDelete={onDelete} />}
 
       {recordingPayment && <RecordPaymentModal payment={recordingPayment} event={event} parent={state.parents.find(p=>p.id===recordingPayment.parentId)} onSave={recordPayment} onClose={() => setRecordingPayment(null)} />}
 
