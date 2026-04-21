@@ -236,19 +236,30 @@ function ParentEventDetail({ state, setState, me, eventId, onBack }) {
     (m.from === me.id && m.to === leaderForDm) || (m.from === leaderForDm && m.to === me.id)
   ));
 
-  const updateRsvp = (payment, rsvp) => {
+  const updateRsvp = async (payment, rsvp) => {
     setState(s => ({ ...s, payments: s.payments.map(p => p.id === payment.id ? { ...p, rsvp } : p) }));
-    toast(`RSVP: ${rsvp}`);
+    try { await apiPutRsvp(payment.id, rsvp); } catch(e) { console.warn('RSVP save failed', e); }
+    toast(`RSVP updated`);
   };
-  const postMessage = () => {
+  const postMessage = async () => {
     if (!message.trim()) return;
-    setState(s => ({ ...s, messages: [...s.messages, { id: 'm'+Math.random().toString(36).slice(2,8), eventId, thread: 'event', from: me.id, body: message.trim(), at: new Date().toISOString() }] }));
-    setMessage(''); toast('Posted');
+    const body = message.trim();
+    setMessage('');
+    try {
+      const msg = await apiPostMessage({ eventId, thread: 'event', body });
+      setState(s => ({ ...s, messages: [...s.messages, msg] }));
+      toast('Posted');
+    } catch(e) { toast('Failed to post message'); }
   };
-  const sendDm = () => {
+  const sendDm = async () => {
     if (!dmMessage.trim()) return;
-    setState(s => ({ ...s, messages: [...s.messages, { id: 'm'+Math.random().toString(36).slice(2,8), eventId, thread: 'dm', from: me.id, to: leaderForDm, body: dmMessage.trim(), at: new Date().toISOString() }] }));
-    setDmMessage(''); toast('Message sent');
+    const body = dmMessage.trim();
+    setDmMessage('');
+    try {
+      const msg = await apiPostMessage({ eventId, thread: 'dm', to: leaderForDm, body });
+      setState(s => ({ ...s, messages: [...s.messages, msg] }));
+      toast('Message sent');
+    } catch(e) { toast('Failed to send message'); }
   };
 
   return (
@@ -516,16 +527,20 @@ function ParentMessages({ state, setState, me }) {
   threads.sort((a,b) => (b.messages[b.messages.length-1]?.at||'').localeCompare(a.messages[a.messages.length-1]?.at||''));
   const active = threads.find(t => t.key === selected) || threads[0];
 
-  const send = () => {
+  const send = async () => {
     if (!reply.trim() || !active) return;
     const leader = state.events.find(e=>e.id===active.eventId)?.assignedGuiders[0];
-    setState(s => ({ ...s, messages: [...s.messages, {
-      id: 'm'+Math.random().toString(36).slice(2,8),
-      eventId: active.eventId, thread: active.kind,
-      from: me.id, to: active.kind === 'dm' ? leader : undefined,
-      body: reply.trim(), at: new Date().toISOString(),
-    }] }));
-    setReply(''); toast('Sent');
+    const body = reply.trim();
+    setReply('');
+    try {
+      const msg = await apiPostMessage({
+        eventId: active.eventId, thread: active.kind,
+        to: active.kind === 'dm' ? leader : undefined,
+        body,
+      });
+      setState(s => ({ ...s, messages: [...s.messages, msg] }));
+      toast('Sent');
+    } catch(e) { toast('Failed to send'); }
   };
 
   return (

@@ -5,6 +5,8 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
   const event = state.events.find(e => e.id === eventId);
   const [tab, setTab] = useStateED('payments');
   const [recordingPayment, setRecordingPayment] = useStateED(null);
+  const [bulkRecording, setBulkRecording] = useStateED(false);
+  const [editingDeposit, setEditingDeposit] = useStateED(null);
   const [messageText, setMessageText] = useStateED('');
   const [bulkReminding, setBulkReminding] = useStateED(false);
   const [editing, setEditing] = useStateED(false);
@@ -47,7 +49,7 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
         else if (event.deposit && newPaid >= event.deposit) status = newPaid > event.deposit ? 'partial' : 'deposit-paid';
         else if (newPaid > 0) status = 'partial';
         else status = 'unpaid';
-        return { ...p, paid: newPaid, status, paidDate: '2026-04-18', lastMethod: method };
+        return { ...p, paid: newPaid, status, paidDate: today(), lastMethod: method };
       });
       return { ...s, payments };
     });
@@ -148,17 +150,19 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
             </div>
             <div className="row gap-2">
               <button className="btn sm"><IconFileDown size={14} /> Export</button>
+              {event.price > 0 && <button className="btn sm primary" onClick={() => setBulkRecording(true)}><IconPlus size={14} /> Bulk record</button>}
               <button className="btn sm" onClick={() => setBulkReminding(true)}><IconMail size={14} /> Remind unpaid</button>
             </div>
           </div>
           <table className="table">
             <thead>
-              <tr><th>Family</th><th>Child</th><th>RSVP</th><th>Amount</th><th>Paid</th><th>Status</th><th></th></tr>
+              <tr><th>Family</th><th>Child</th><th>RSVP</th><th>Deposit req.</th><th>Amount</th><th>Paid</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {payments.map(p => {
                 const parent = state.parents.find(pa => pa.id === p.parentId);
                 const child = parent?.children.find(c => c.id === p.childId);
+                const depositReq = p.customDeposit != null ? p.customDeposit : (event.deposit || 0);
                 return (
                   <tr key={p.id}>
                     <td><div className="row gap-2"><Avatar name={parent?.name} size="sm" /> <span style={{ fontWeight: 500 }}>{parent?.name}</span></div></td>
@@ -169,13 +173,26 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
                       {p.rsvp === 'no' && <span className="chip terracotta">No</span>}
                       {(!p.rsvp || p.rsvp === 'pending') && <span className="chip muted">Pending</span>}
                     </td>
-                    <td className="num">${p.amount}{p.customDeposit != null && <div className="muted" style={{ fontSize: 11 }}>dep: ${p.customDeposit}</div>}</td>
+                    <td>
+                      {event.deposit > 0 ? (
+                        <div className="row gap-1">
+                          <span className="num" style={{ fontSize: 13 }}>${depositReq}</span>
+                          {p.customDeposit != null && <span className="chip honey" style={{ fontSize: 11 }}>custom</span>}
+                          <button className="icon-btn" style={{ padding: 3 }} title="Set custom deposit" onClick={() => setEditingDeposit({ ...p, _depositInput: depositReq })}>
+                            <IconEdit size={12} />
+                          </button>
+                        </div>
+                      ) : <span className="muted" style={{ fontSize: 13 }}>—</span>}
+                    </td>
+                    <td className="num">${p.amount}</td>
                     <td className="num">${p.paid}</td>
                     <td><StatusChip status={p.status} /></td>
                     <td>
-                      {p.status !== 'fully-paid' && p.amount > 0 ? (
-                        <button className="btn sm" onClick={() => setRecordingPayment(p)}>Record</button>
-                      ) : <span className="muted" style={{ fontSize: 13 }}>—</span>}
+                      <div className="row gap-1">
+                        {p.status !== 'fully-paid' && p.amount > 0 ? (
+                          <button className="btn sm" onClick={() => setRecordingPayment(p)}>Record</button>
+                        ) : <span className="muted" style={{ fontSize: 13 }}>—</span>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -290,6 +307,61 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
 
       {editing && <EventEditor event={event} state={state} onSave={onSave} onClose={() => setEditing(false)} onDelete={onDelete} />}
 
+      {editingDeposit && (
+        <Modal open={true} onClose={() => setEditingDeposit(null)} size="sm" title="Set custom deposit"
+          footer={<>
+            <button className="btn danger-ghost" onClick={() => {
+              setState(s => ({ ...s, payments: s.payments.map(p => p.id === editingDeposit.id ? { ...p, customDeposit: null } : p) }));
+              setEditingDeposit(null); toast('Deposit reset to event default');
+            }}>Reset to default</button>
+            <div style={{ flex: 1 }} />
+            <button className="btn" onClick={() => setEditingDeposit(null)}>Cancel</button>
+            <button className="btn primary" onClick={() => {
+              const val = Number(editingDeposit._depositInput);
+              setState(s => ({ ...s, payments: s.payments.map(p => p.id === editingDeposit.id ? { ...p, customDeposit: val } : p) }));
+              setEditingDeposit(null); toast(`Deposit set to $${val}`);
+            }}>Save</button>
+          </>}>
+          <div className="stack gap-3">
+            <p style={{ fontSize: 14, color: 'var(--ink-700)' }}>
+              Override the deposit amount for <strong>{state.parents.find(p=>p.id===editingDeposit.parentId)?.name}</strong>.
+              The event default is <strong>${event.deposit}</strong>.
+            </p>
+            <div className="field-row">
+              <label className="label">Custom deposit amount</label>
+              <input className="input num" type="number" min="0" value={editingDeposit._depositInput}
+                onChange={e => setEditingDeposit(d => ({ ...d, _depositInput: e.target.value }))} />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {bulkRecording && (
+        <BulkRecordModal
+          payments={payments} event={event} state={state}
+          onSave={(updates) => {
+            setState(s => {
+              const updated = s.payments.map(p => {
+                const u = updates.find(x => x.id === p.id);
+                if (!u) return p;
+                const newPaid = p.paid + u.amount;
+                let status;
+                const dep = p.customDeposit != null ? p.customDeposit : (event.deposit || 0);
+                if (newPaid >= p.amount) status = 'fully-paid';
+                else if (dep && newPaid >= dep) status = newPaid > dep ? 'partial' : 'deposit-paid';
+                else if (newPaid > 0) status = 'partial';
+                else status = 'unpaid';
+                return { ...p, paid: newPaid, status, paidDate: today(), lastMethod: u.method };
+              });
+              return { ...s, payments: updated };
+            });
+            setBulkRecording(false);
+            toast(`Recorded payments for ${updates.length} families`);
+          }}
+          onClose={() => setBulkRecording(false)}
+        />
+      )}
+
       {recordingPayment && <RecordPaymentModal payment={recordingPayment} event={event} parent={state.parents.find(p=>p.id===recordingPayment.parentId)} onSave={recordPayment} onClose={() => setRecordingPayment(null)} />}
 
       <Modal open={bulkReminding} onClose={() => setBulkReminding(false)} size="md" title="Send payment reminder"
@@ -301,6 +373,93 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
         </div>
       </Modal>
     </div>
+  );
+}
+
+function BulkRecordModal({ payments, event, state, onSave, onClose }) {
+  const unpaid = payments.filter(p => p.status !== 'fully-paid' && p.amount > 0);
+  const [selected, setSelected] = useStateED(() => new Set(unpaid.map(p => p.id)));
+  const [mode, setMode] = useStateED('deposit'); // deposit | full | custom
+  const [customAmt, setCustomAmt] = useStateED(event.deposit || '');
+  const [method, setMethod] = useStateED('e-transfer');
+  const toast = useToast();
+
+  const getAmount = (p) => {
+    if (mode === 'deposit') return (p.customDeposit != null ? p.customDeposit : (event.deposit || 0));
+    if (mode === 'full') return p.amount - p.paid;
+    return Number(customAmt) || 0;
+  };
+
+  const handleSave = () => {
+    const updates = [...selected].map(id => {
+      const p = payments.find(x => x.id === id);
+      return { id, amount: getAmount(p), method };
+    }).filter(u => u.amount > 0);
+    if (!updates.length) { toast('No payments to record'); return; }
+    onSave(updates);
+  };
+
+  return (
+    <Modal open={true} onClose={onClose} size="md" title="Bulk record payments"
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={handleSave}><IconCheck size={14}/> Record for {selected.size} families</button></>}>
+      <div className="stack gap-5">
+        <div>
+          <div className="section-h">Amount to record</div>
+          <div className="row gap-2" style={{ flexWrap: 'wrap' }}>
+            {event.deposit > 0 && <button className={`btn sm ${mode==='deposit'?'primary':''}`} onClick={() => setMode('deposit')}>Deposit only (${event.deposit})</button>}
+            <button className={`btn sm ${mode==='full'?'primary':''}`} onClick={() => setMode('full')}>Full remaining balance</button>
+            <button className={`btn sm ${mode==='custom'?'primary':''}`} onClick={() => setMode('custom')}>Custom amount</button>
+          </div>
+          {mode === 'custom' && (
+            <div className="field-row" style={{ marginTop: 10, maxWidth: 180 }}>
+              <label className="label">Amount per family</label>
+              <input className="input num" type="number" value={customAmt} onChange={e => setCustomAmt(e.target.value)} />
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="section-h">Payment method</div>
+          <div className="row gap-2">
+            {['e-transfer','cash','cheque'].map(m => (
+              <button key={m} className={`btn sm ${method===m?'primary':''}`} onClick={() => setMethod(m)}>{m}</button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="row between" style={{ marginBottom: 8 }}>
+            <div className="section-h" style={{ marginBottom: 0 }}>Families ({unpaid.length} unpaid)</div>
+            <div className="row gap-2">
+              <button className="btn sm" onClick={() => setSelected(new Set(unpaid.map(p=>p.id)))}>All</button>
+              <button className="btn sm" onClick={() => setSelected(new Set())}>None</button>
+            </div>
+          </div>
+          <div className="stack gap-1">
+            {unpaid.map(p => {
+              const parent = state.parents.find(pa => pa.id === p.parentId);
+              const child = parent?.children.find(c => c.id === p.childId);
+              const amt = getAmount(p);
+              return (
+                <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', borderRadius: 'var(--r-md)', background: selected.has(p.id) ? 'var(--brand-50)' : 'var(--cream-50)', cursor: 'pointer', border: '1px solid var(--border)' }}>
+                  <input type="checkbox" checked={selected.has(p.id)} onChange={e => {
+                    const next = new Set(selected);
+                    e.target.checked ? next.add(p.id) : next.delete(p.id);
+                    setSelected(next);
+                  }} />
+                  <Avatar name={parent?.name} size="sm" />
+                  <div className="grow" style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{parent?.name}</div>
+                    <div className="muted" style={{ fontSize: 11 }}>{child?.name} · {p.status} · ${p.paid} paid of ${p.amount}</div>
+                  </div>
+                  <span className="num" style={{ fontWeight: 600, fontSize: 14, color: 'var(--brand-700)' }}>+${amt}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

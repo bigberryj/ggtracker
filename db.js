@@ -152,4 +152,90 @@ async function setState(data) {
   );
 }
 
-module.exports = { initDB, getState, setState };
+// ── Users ────────────────────────────────────────────────────────────────────
+
+async function initUsers() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin', 'parent')),
+      person_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  const { rows } = await pool.query('SELECT COUNT(*) FROM users');
+  if (parseInt(rows[0].count) === 0) {
+    await seedUsers();
+  }
+}
+
+async function seedUsers() {
+  const bcrypt = require('bcryptjs');
+  const DEFAULT_PASSWORD = 'guides2026';
+  const hash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+
+  const state = await getState();
+
+  const toInsert = [
+    ...state.guiders.map(g => ({ email: g.email, role: 'admin', personId: g.id })),
+    ...state.parents.map(p => ({ email: p.email, role: 'parent', personId: p.id })),
+  ];
+
+  for (const u of toInsert) {
+    await pool.query(
+      'INSERT INTO users (email, password_hash, role, person_id) VALUES ($1, $2, $3, $4) ON CONFLICT (email) DO NOTHING',
+      [u.email, hash, u.role, u.personId]
+    );
+  }
+
+  console.log('\n── Default accounts created (password: guides2026) ─────────────');
+  console.log('ADMINS (guiders):');
+  state.guiders.forEach(g => console.log(`  ${g.email}`));
+  console.log('PARENTS:');
+  state.parents.forEach(p => console.log(`  ${p.email}`));
+  console.log('────────────────────────────────────────────────────────────────\n');
+}
+
+async function getUserByEmail(email) {
+  const { rows } = await pool.query(
+    'SELECT id, email, password_hash AS "passwordHash", role, person_id AS "personId" FROM users WHERE email = $1',
+    [email.toLowerCase().trim()]
+  );
+  return rows[0] || null;
+}
+
+async function listUsers() {
+  const { rows } = await pool.query(
+    'SELECT id, email, role, person_id AS "personId", created_at AS "createdAt" FROM users ORDER BY role, email'
+  );
+  return rows;
+}
+
+async function createUser({ email, password, role, personId }) {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash(password, 10);
+  const { rows } = await pool.query(
+    'INSERT INTO users (email, password_hash, role, person_id) VALUES ($1, $2, $3, $4) RETURNING id, email, role, person_id AS "personId"',
+    [email.toLowerCase().trim(), hash, role, personId]
+  );
+  return rows[0];
+}
+
+async function updateUserPassword(id, newPassword) {
+  const bcrypt = require('bcryptjs');
+  const hash = await bcrypt.hash(newPassword, 10);
+  await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, id]);
+}
+
+async function deleteUser(id) {
+  await pool.query('DELETE FROM users WHERE id = $1', [id]);
+}
+
+module.exports = {
+  pool,
+  initDB, getState, setState,
+  initUsers, getUserByEmail, listUsers, createUser, updateUserPassword, deleteUser,
+};

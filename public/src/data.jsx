@@ -3,7 +3,7 @@
 
 const STORAGE_KEY = 'gg_payment_tracker_v1';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function paymentStatusMeta(status) {
   const map = {
@@ -42,6 +42,10 @@ function daysUntil(iso) {
   return Math.round((target - now) / (1000 * 60 * 60 * 24));
 }
 
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 // ── Cache helpers ─────────────────────────────────────────────────────────────
 
 function readCache() {
@@ -60,6 +64,7 @@ function writeCache(state) {
 
 async function fetchState() {
   const res = await fetch('/api/state');
+  if (res.status === 401) throw Object.assign(new Error('Unauthenticated'), { status: 401 });
   if (!res.ok) throw new Error('Failed to fetch state');
   const { data } = await res.json();
   writeCache(data);
@@ -69,75 +74,62 @@ async function fetchState() {
 async function pushState(state) {
   writeCache(state);
   try {
-    await fetch('/api/state', {
+    const res = await fetch('/api/state', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data: state }),
     });
+    if (res.status === 401) {
+      // Session expired — reload to show login
+      window.location.reload();
+    }
   } catch (e) {
     console.warn('Failed to persist state to server:', e);
   }
 }
 
-// ── Public surface (mirrors original localStorage API) ────────────────────────
+// ── Public surface ────────────────────────────────────────────────────────────
 
 function loadState() {
-  // Synchronous read from cache for immediate render; App will sync from API on mount.
   return readCache() || null;
 }
 
+// saveState is role-aware: admins push full state; parents update via specific endpoints
 function saveState(state) {
-  pushState(state);
+  // __currentUserRole is set by the App component on mount and role change
+  if (window.__currentUserRole !== 'parent') {
+    pushState(state);
+  } else {
+    writeCache(state); // update local cache for immediate UI
+  }
 }
 
 function resetState() {
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
-  fetchState().catch(() => {});
 }
 
-// ── App bootstrap ─────────────────────────────────────────────────────────────
-// Called by app.jsx instead of ReactDOM.createRoot directly.
+// Specific parent-safe API calls (bypass full state PUT)
+async function apiPostMessage({ eventId, thread, to, body }) {
+  const res = await fetch('/api/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ eventId, thread, to, body }),
+  });
+  if (!res.ok) throw new Error('Failed to post message');
+  return (await res.json()).msg;
+}
 
-function initApp() {
-  const root = ReactDOM.createRoot(document.getElementById('root'));
-
-  // Show a brief loading screen while we fetch fresh state from the server.
-  // If there's a cached version we render immediately and update in background.
-  const cached = readCache();
-  if (cached) {
-    root.render(<App initialState={cached} />);
-    fetchState()
-      .then(fresh => root.render(<App initialState={fresh} />))
-      .catch(() => {});
-  } else {
-    root.render(
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100vh', flexDirection: 'column', gap: 16,
-        fontFamily: 'Public Sans, sans-serif', color: 'oklch(0.45 0.02 75)',
-        background: 'oklch(0.985 0.008 85)',
-      }}>
-        <div style={{
-          width: 42, height: 42, borderRadius: 10,
-          background: 'linear-gradient(145deg, oklch(0.55 0.09 154), oklch(0.38 0.07 158))',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#fff', fontWeight: 700, fontSize: 15,
-        }}>GG</div>
-        <div style={{ fontSize: 14 }}>Loading Meadowlark…</div>
-      </div>
-    );
-    fetchState()
-      .then(state => root.render(<App initialState={state} />))
-      .catch(err => {
-        console.error(err);
-        root.render(<div style={{ padding: 40, fontFamily: 'sans-serif', color: 'red' }}>
-          Failed to connect to server. Please refresh.
-        </div>);
-      });
-  }
+async function apiPutRsvp(paymentId, rsvp) {
+  const res = await fetch(`/api/rsvp/${paymentId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rsvp }),
+  });
+  if (!res.ok) throw new Error('Failed to update RSVP');
 }
 
 Object.assign(window, {
-  loadState, saveState, resetState, fetchState, pushState, initApp,
+  loadState, saveState, resetState, fetchState, pushState,
+  apiPostMessage, apiPutRsvp, today,
   paymentStatusMeta, formatDate, formatDateLong, formatMoney, daysUntil,
 });

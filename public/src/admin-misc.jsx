@@ -185,6 +185,10 @@ function AdminSettings({ state, setState }) {
       </div>
 
       <div style={{ gridColumn: '1 / -1' }}>
+        <UserAccounts state={state} />
+      </div>
+
+      <div style={{ gridColumn: '1 / -1' }}>
         <BackupRestore state={state} setState={setState} />
       </div>
 
@@ -192,6 +196,131 @@ function AdminSettings({ state, setState }) {
         <button className="btn" onClick={() => setG(state.group)}>Discard</button>
         <button className="btn primary" onClick={save}>Save changes</button>
       </div>
+    </div>
+  );
+}
+
+function UserAccounts({ state }) {
+  const { useState: useStateUA, useEffect: useEffectUA } = React;
+  const [users, setUsers] = useStateUA([]);
+  const [adding, setAdding] = useStateUA(false);
+  const [newEmail, setNewEmail] = useStateUA('');
+  const [newPerson, setNewPerson] = useStateUA('');
+  const [newRole, setNewRole] = useStateUA('parent');
+  const [newPassword, setNewPassword] = useStateUA('guides2026');
+  const [resetTarget, setResetTarget] = useStateUA(null);
+  const [resetPw, setResetPw] = useStateUA('');
+  const toast = useToast();
+
+  const load = () => fetch('/api/users').then(r=>r.json()).then(setUsers).catch(()=>{});
+  useEffectUA(() => { load(); }, []);
+
+  const people = [
+    ...state.guiders.map(g => ({ ...g, kind: 'admin' })),
+    ...state.parents.map(p => ({ ...p, kind: 'parent' })),
+  ];
+  const personOptions = people.filter(p => !users.find(u => u.personId === p.id));
+
+  const createUser = async () => {
+    if (!newEmail || !newPerson) { toast('Fill in all fields'); return; }
+    const res = await fetch('/api/users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: newEmail, password: newPassword, role: newRole, personId: newPerson }),
+    });
+    if (!res.ok) { const d = await res.json(); toast(d.error || 'Failed'); return; }
+    toast('Account created'); setAdding(false); setNewEmail(''); setNewPerson(''); setNewPassword('guides2026'); load();
+  };
+
+  const deleteUser = async (id) => {
+    if (!confirm('Remove this login account?')) return;
+    await fetch(`/api/users/${id}`, { method: 'DELETE' });
+    toast('Account removed'); load();
+  };
+
+  const resetPassword = async () => {
+    if (!resetPw || resetPw.length < 6) { toast('Password must be at least 6 characters'); return; }
+    const res = await fetch(`/api/users/${resetTarget.id}/password`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: resetPw }),
+    });
+    if (!res.ok) { toast('Failed to reset'); return; }
+    toast('Password updated'); setResetTarget(null); setResetPw('');
+  };
+
+  const personName = (personId) => people.find(p => p.id === personId)?.name || personId;
+
+  return (
+    <div className="card flush">
+      <div className="card-header">
+        <h3>Login accounts</h3>
+        <button className="btn sm primary" onClick={() => setAdding(true)}><IconPlus size={13}/> Create account</button>
+      </div>
+      <table className="table">
+        <thead>
+          <tr><th>Person</th><th>Email</th><th>Role</th><th></th></tr>
+        </thead>
+        <tbody>
+          {users.map(u => (
+            <tr key={u.id}>
+              <td><span style={{ fontWeight: 500 }}>{personName(u.personId)}</span></td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{u.email}</td>
+              <td>{u.role === 'admin' ? <span className="chip brand">Admin</span> : <span className="chip muted">Parent</span>}</td>
+              <td>
+                <div className="row gap-1">
+                  <button className="btn sm" onClick={() => { setResetTarget(u); setResetPw(''); }}>Reset password</button>
+                  <button className="icon-btn" onClick={() => deleteUser(u.id)}><IconTrash size={14}/></button>
+                </div>
+              </td>
+            </tr>
+          ))}
+          {users.length === 0 && (
+            <tr><td colSpan={4} className="empty" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>No accounts yet.</td></tr>
+          )}
+        </tbody>
+      </table>
+      <div className="card-footer">
+        <span className="muted" style={{ fontSize: 13 }}>Default password on first run: <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>guides2026</code></span>
+      </div>
+
+      {adding && (
+        <Modal open={true} onClose={() => setAdding(false)} size="sm" title="Create login account"
+          footer={<><button className="btn" onClick={() => setAdding(false)}>Cancel</button><button className="btn primary" onClick={createUser}>Create account</button></>}>
+          <div className="stack gap-4">
+            <div className="field-row">
+              <label className="label">Person</label>
+              <select className="select" value={newPerson} onChange={e => { setNewPerson(e.target.value); const p = people.find(x=>x.id===e.target.value); if(p) { setNewRole(p.kind === 'admin' ? 'admin' : 'parent'); setNewEmail(p.email||''); } }}>
+                <option value="">— select —</option>
+                {personOptions.map(p => <option key={p.id} value={p.id}>{p.name} ({p.kind})</option>)}
+              </select>
+            </div>
+            <div className="field-row">
+              <label className="label">Email (login)</label>
+              <input className="input" type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)} />
+            </div>
+            <div className="field-row">
+              <label className="label">Role</label>
+              <div className="row gap-2">
+                <button className={`btn sm ${newRole==='admin'?'primary':''}`} onClick={() => setNewRole('admin')}>Admin</button>
+                <button className={`btn sm ${newRole==='parent'?'primary':''}`} onClick={() => setNewRole('parent')}>Parent</button>
+              </div>
+            </div>
+            <div className="field-row">
+              <label className="label">Initial password</label>
+              <input className="input" type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {resetTarget && (
+        <Modal open={true} onClose={() => setResetTarget(null)} size="sm" title={`Reset password — ${personName(resetTarget.personId)}`}
+          footer={<><button className="btn" onClick={() => setResetTarget(null)}>Cancel</button><button className="btn primary" onClick={resetPassword}>Save new password</button></>}>
+          <div className="field-row">
+            <label className="label">New password</label>
+            <input className="input" type="text" value={resetPw} onChange={e => setResetPw(e.target.value)} placeholder="At least 6 characters" autoFocus />
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
