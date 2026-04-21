@@ -27,6 +27,7 @@ function AdminDashboard({ state, setState, navigate }) {
     .filter(p => p.status === 'overdue' || (p.status === 'unpaid' && state.events.find(e => e.id === p.eventId)?.depositDue && daysUntil(state.events.find(e => e.id === p.eventId).depositDue) < 7));
 
   return (
+    <React.Fragment>
     <div className="stack gap-6">
       <div className="stat-grid">
         <div className="stat">
@@ -171,6 +172,7 @@ function AdminDashboard({ state, setState, navigate }) {
     {showPaymentFlow && (
       <RecordPaymentFlowModal state={state} setState={setState} onClose={() => setShowPaymentFlow(false)} />
     )}
+    </React.Fragment>
   );
 }
 
