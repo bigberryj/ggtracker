@@ -494,156 +494,169 @@ function RecordPaymentModal({ payment, event, parent, onSave, onClose }) {
 }
 
 function RecordPaymentFlowModal({ state, setState, onClose, initialEventId }) {
-  // All hooks at the very top — no useMemo, no inline sub-components
   const [step, setStep] = useStateED(initialEventId ? 2 : 1);
-  const [selectedEventId, setSelectedEventId] = useStateED(initialEventId || null);
-  const [selectedIds, setSelectedIds] = useStateED([]);
+  const [eventId, setEventId] = useStateED(initialEventId || null);
+  const [selected, setSelected] = useStateED([]); // "parentId:childId" strings
   const [mode, setMode] = useStateED('full');
   const [customAmounts, setCustomAmounts] = useStateED({});
   const [method, setMethod] = useStateED('e-transfer');
   const toast = useToast();
 
-  // Derived values — plain computation, no hooks
-  const event = state.events.find(e => e.id === selectedEventId) || null;
-  const eventPayments = event ? state.payments.filter(p => p.eventId === event.id) : [];
+  // Build from event.assigned so families always show regardless of payment record state
+  const event = eventId ? (state.events.find(e => e.id === eventId) || null) : null;
+  const families = event ? (event.assigned || []).map(function(pid) {
+    var par = state.parents.find(function(p) { return p.id === pid; }) || null;
+    if (!par) return null;
+    var kids = (par.children || []).map(function(child) {
+      var pmt = state.payments.find(function(p) { return p.eventId === eventId && p.parentId === pid && p.childId === child.id; }) || null;
+      return { id: child.id, name: child.name, patrol: child.patrol, payment: pmt };
+    });
+    return { parent: par, children: kids };
+  }).filter(Boolean) : [];
 
-  // Build family groups: [ { parent, childPayments: [...] } ]
-  const familyGroups = [];
-  const seenParents = new Set();
-  for (var fi = 0; fi < eventPayments.length; fi++) {
-    var fp = eventPayments[fi];
-    if (!seenParents.has(fp.parentId)) {
-      seenParents.add(fp.parentId);
-      var fparent = state.parents.find(function(pa) { return pa.id === fp.parentId; }) || null;
-      var fchildren = eventPayments.filter(function(x) { return x.parentId === fp.parentId; });
-      familyGroups.push({ parent: fparent, childPayments: fchildren });
-    }
-  }
+  var selSet = new Set(selected);
+  var makeKey = function(pid, cid) { return pid + ':' + cid; };
 
-  const selectedSet = new Set(selectedIds);
-
-  const getAmount = (p) => {
-    if (!p) return 0;
+  var getAmount = function(pid, cid) {
+    var fam = null;
+    for (var i = 0; i < families.length; i++) { if (families[i].parent.id === pid) { fam = families[i]; break; } }
+    var kid = fam ? fam.children.find(function(c) { return c.id === cid; }) : null;
+    var pmt = kid ? kid.payment : null;
+    var paid = pmt ? pmt.paid : 0;
+    var fullAmt = pmt ? pmt.amount : (event ? event.price || 0 : 0);
+    var key = makeKey(pid, cid);
     if (mode === 'deposit') {
-      const dep = p.customDeposit != null ? p.customDeposit : (event ? event.deposit || 0 : 0);
-      return Math.max(0, dep - p.paid);
+      var dep = pmt && pmt.customDeposit != null ? pmt.customDeposit : (event ? event.deposit || 0 : 0);
+      return Math.max(0, dep - paid);
     }
-    if (mode === 'full') return Math.max(0, p.amount - p.paid);
-    return Math.max(0, Number(customAmounts[p.id] != null ? customAmounts[p.id] : (p.amount - p.paid)));
+    if (mode === 'full') return Math.max(0, fullAmt - paid);
+    var custom = customAmounts[key];
+    return Math.max(0, Number(custom != null ? custom : (fullAmt - paid)));
   };
 
-  const toggleFamily = (childPayments) => {
-    const ids = childPayments.map(p => p.id);
-    const allSel = ids.every(id => selectedSet.has(id));
+  var toggleFamily = function(fam) {
+    var keys = fam.children.map(function(c) { return makeKey(fam.parent.id, c.id); });
+    var allSel = keys.every(function(k) { return selSet.has(k); });
     if (allSel) {
-      setSelectedIds(selectedIds.filter(id => !ids.includes(id)));
+      setSelected(selected.filter(function(k) { return keys.indexOf(k) === -1; }));
     } else {
-      const toAdd = ids.filter(id => !selectedSet.has(id));
-      setSelectedIds(selectedIds.concat(toAdd));
+      var toAdd = keys.filter(function(k) { return !selSet.has(k); });
+      setSelected(selected.concat(toAdd));
     }
   };
 
-  const toggleChild = (id) => {
-    if (selectedSet.has(id)) {
-      setSelectedIds(selectedIds.filter(x => x !== id));
+  var toggleChild = function(pid, cid) {
+    var key = makeKey(pid, cid);
+    if (selSet.has(key)) {
+      setSelected(selected.filter(function(k) { return k !== key; }));
     } else {
-      setSelectedIds(selectedIds.concat([id]));
+      setSelected(selected.concat([key]));
     }
   };
 
-  const selectEvent = (id) => {
-    setSelectedEventId(id);
-    setSelectedIds([]);
+  var selectEvent = function(id) {
+    setEventId(id);
+    setSelected([]);
     setCustomAmounts({});
-    setMode(state.events.find(e => e.id === id) && state.events.find(e => e.id === id).deposit > 0 ? 'deposit' : 'full');
+    var ev = state.events.find(function(e) { return e.id === id; });
+    setMode(ev && ev.deposit > 0 ? 'deposit' : 'full');
   };
 
-  const totalToRecord = selectedIds.reduce((sum, id) => {
-    const p = eventPayments.find(x => x.id === id);
-    return sum + getAmount(p);
+  var allChildKeys = families.reduce(function(acc, fam) {
+    return acc.concat(fam.children.map(function(c) { return makeKey(fam.parent.id, c.id); }));
+  }, []);
+  var unpaidKeys = families.reduce(function(acc, fam) {
+    return acc.concat(fam.children.filter(function(c) {
+      return !c.payment || c.payment.status !== 'fully-paid';
+    }).map(function(c) { return makeKey(fam.parent.id, c.id); }));
+  }, []);
+
+  var totalToRecord = selected.reduce(function(sum, key) {
+    var parts = key.split(':');
+    return sum + getAmount(parts[0], parts[1]);
   }, 0);
 
-  const handleConfirm = () => {
-    const updates = selectedIds.map(id => {
-      const p = eventPayments.find(x => x.id === id);
-      return { id, amount: getAmount(p), method };
-    }).filter(u => u.amount > 0);
-    if (!updates.length) { toast('No amounts to record — balances may already be met'); return; }
-    setState(s => {
-      const updated = s.payments.map(p => {
-        const u = updates.find(x => x.id === p.id);
-        if (!u) return p;
-        const newPaid = p.paid + u.amount;
-        const dep = p.customDeposit != null ? p.customDeposit : (event ? event.deposit || 0 : 0);
-        let status;
-        if (newPaid >= p.amount) status = 'fully-paid';
-        else if (dep && newPaid >= dep) status = newPaid > dep ? 'partial' : 'deposit-paid';
-        else if (newPaid > 0) status = 'partial';
-        else status = 'unpaid';
-        return { ...p, paid: newPaid, status, paidDate: today(), lastMethod: u.method };
-      });
-      return { ...s, payments: updated };
+  var handleConfirm = function() {
+    var anyAmount = selected.some(function(key) {
+      var parts = key.split(':'); return getAmount(parts[0], parts[1]) > 0;
     });
-    toast('Recorded ' + updates.length + ' payment' + (updates.length !== 1 ? 's' : '') + ' — $' + totalToRecord + ' total');
+    if (!anyAmount) { toast('No amounts to record — balances may already be met'); return; }
+    setState(function(s) {
+      var payments = s.payments.slice();
+      selected.forEach(function(key) {
+        var parts = key.split(':');
+        var pid = parts[0], cid = parts[1];
+        var amt = getAmount(pid, cid);
+        if (amt <= 0) return;
+        var idx = payments.findIndex(function(p) { return p.eventId === eventId && p.parentId === pid && p.childId === cid; });
+        if (idx >= 0) {
+          var p = payments[idx];
+          var newPaid = p.paid + amt;
+          var dep = p.customDeposit != null ? p.customDeposit : (event ? event.deposit || 0 : 0);
+          var status = newPaid >= p.amount ? 'fully-paid' : (dep && newPaid >= dep ? 'deposit-paid' : (newPaid > 0 ? 'partial' : 'unpaid'));
+          payments[idx] = Object.assign({}, p, { paid: newPaid, status: status, paidDate: today(), lastMethod: method });
+        } else {
+          var fullAmt = event ? event.price || 0 : 0;
+          var newPaid2 = amt;
+          var dep2 = event ? event.deposit || 0 : 0;
+          var status2 = newPaid2 >= fullAmt ? 'fully-paid' : (dep2 && newPaid2 >= dep2 ? 'deposit-paid' : (newPaid2 > 0 ? 'partial' : 'unpaid'));
+          payments.push({ id: 'pay' + Math.random().toString(36).slice(2,8), parentId: pid, childId: cid, eventId: eventId, amount: fullAmt, paid: newPaid2, status: status2, paidDate: today(), lastMethod: method, rsvp: 'pending' });
+        }
+      });
+      return Object.assign({}, s, { payments: payments });
+    });
+    toast('Recorded payments for ' + selected.length + ' child' + (selected.length !== 1 ? 'ren' : ''));
     onClose();
   };
 
-  const paidEvents = state.events.filter(e => e.price > 0).sort((a,b) => a.date.localeCompare(b.date));
-  const sel = selectedIds.length;
-
-  // Stepper bar — inlined JSX, no sub-component
-  const stepLabels = ['Choose event', 'Select children', 'Confirm'];
-  const stepperBar = (
-    <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:20, flexWrap:'wrap' }}>
-      {stepLabels.map((l, i) => {
-        const n = i + 1;
-        return (
-          <React.Fragment key={n}>
-            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-              <div style={{ width:22, height:22, borderRadius:'50%', background: step >= n ? 'var(--brand-600)' : 'var(--ink-200)', color:'white', display:'grid', placeItems:'center', fontSize:11, fontWeight:700, flexShrink:0 }}>{n}</div>
-              <span style={{ fontSize:13, color: step >= n ? 'var(--ink-900)' : 'var(--text-muted)', fontWeight: step === n ? 600 : 400 }}>{l}</span>
-            </div>
-            {i < 2 && <div style={{ width:18, height:1, background:'var(--border)', flexShrink:0 }}/>}
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
+  var paidEvents = state.events.filter(function(e) { return e.price > 0; }).sort(function(a,b) { return a.date.localeCompare(b.date); });
+  var sel = selected.length;
 
   return (
     <Modal open={true} onClose={onClose} size="lg" title="Record a payment"
       footer={
         step === 1 ? (
-          <><button className="btn" onClick={onClose}>Cancel</button><div style={{flex:1}}/><button className="btn primary" disabled={!selectedEventId} onClick={() => setStep(2)}>Next: Select children →</button></>
+          <><button className="btn" onClick={onClose}>Cancel</button><div style={{flex:1}}/><button className="btn primary" disabled={!eventId} onClick={function(){setStep(2);}}>Next: Select families →</button></>
         ) : step === 2 ? (
-          <><button className="btn" onClick={() => setStep(1)}>← Back</button><div style={{flex:1}}/><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={sel === 0} onClick={() => setStep(3)}>Next: Confirm ({sel} child{sel !== 1 ? 'ren' : ''}) →</button></>
+          <><button className="btn" onClick={function(){setStep(1);}}>← Back</button><div style={{flex:1}}/><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={sel===0} onClick={function(){setStep(3);}}>Next: Confirm ({sel} child{sel!==1?'ren':''}) →</button></>
         ) : (
-          <><button className="btn" onClick={() => setStep(2)}>← Back</button><div style={{flex:1}}/><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={handleConfirm}><IconCheck size={14}/> Record ${totalToRecord}</button></>
+          <><button className="btn" onClick={function(){setStep(2);}}>← Back</button><div style={{flex:1}}/><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={handleConfirm}><IconCheck size={14}/> Record ${totalToRecord}</button></>
         )
       }>
-      {stepperBar}
+
+      <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:20, flexWrap:'wrap' }}>
+        {['Choose event','Select families','Confirm'].map(function(l, i) {
+          var n = i + 1;
+          return (
+            <React.Fragment key={n}>
+              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <div style={{ width:22, height:22, borderRadius:'50%', background: step>=n?'var(--brand-600)':'var(--ink-200)', color:'white', display:'grid', placeItems:'center', fontSize:11, fontWeight:700 }}>{n}</div>
+                <span style={{ fontSize:13, color: step>=n?'var(--ink-900)':'var(--text-muted)', fontWeight: step===n?600:400 }}>{l}</span>
+              </div>
+              {i < 2 && <div style={{ width:16, height:1, background:'var(--border)' }}/>}
+            </React.Fragment>
+          );
+        })}
+      </div>
 
       {step === 1 && (
         <div className="stack gap-2">
-          {paidEvents.length === 0 && <div className="empty muted">No paid events found.</div>}
-          {paidEvents.map(ev => {
-            const ps = state.payments.filter(p => p.eventId === ev.id);
-            const paidCount = ps.filter(p => p.status === 'fully-paid').length;
-            const outstanding = ps.length - paidCount;
+          {paidEvents.length === 0 && <div className="muted">No paid events found.</div>}
+          {paidEvents.map(function(ev) {
+            var ps = state.payments.filter(function(p) { return p.eventId === ev.id; });
+            var paidCount = ps.filter(function(p) { return p.status === 'fully-paid'; }).length;
             return (
-              <label key={ev.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'12px 16px', borderRadius:'var(--r-md)', cursor:'pointer', background: selectedEventId===ev.id ? 'var(--brand-50)' : 'var(--cream-50)', border:'1px solid ' + (selectedEventId===ev.id ? 'var(--brand-300)' : 'var(--border)') }}>
-                <input type="radio" name="rpf-event" checked={selectedEventId===ev.id} onChange={() => selectEvent(ev.id)} />
-                <div style={{ textAlign:'center', minWidth:38 }}>
+              <label key={ev.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'12px 16px', borderRadius:'var(--r-md)', cursor:'pointer', background: eventId===ev.id?'var(--brand-50)':'var(--cream-50)', border:'1px solid '+(eventId===ev.id?'var(--brand-300)':'var(--border)') }}>
+                <input type="radio" name="rpf-ev" checked={eventId===ev.id} onChange={function(){selectEvent(ev.id);}} />
+                <div style={{ textAlign:'center', minWidth:36 }}>
                   <div style={{ fontSize:10, fontWeight:700, textTransform:'uppercase', color:'var(--text-muted)' }}>{new Date(ev.date+'T00:00:00').toLocaleDateString('en-CA',{month:'short'})}</div>
                   <div style={{ fontFamily:'var(--font-display)', fontSize:18, fontWeight:600, lineHeight:1 }}>{new Date(ev.date+'T00:00:00').getDate()}</div>
                 </div>
                 <div style={{ flex:1 }}>
                   <div style={{ fontWeight:600, fontSize:14 }}>{ev.title}</div>
-                  <div className="muted" style={{ fontSize:12 }}>
-                    ${ev.price} per child{ev.deposit ? ' · $' + ev.deposit + ' deposit' : ''} · {paidCount}/{ps.length} fully paid{outstanding > 0 ? ' · ' + outstanding + ' outstanding' : ''}
-                  </div>
+                  <div className="muted" style={{ fontSize:12 }}>${ev.price} per child{ev.deposit?' · $'+ev.deposit+' deposit':''} · {ev.assigned.length} families · {paidCount}/{ps.length} fully paid</div>
                 </div>
-                {ev.status==='upcoming' ? <span className="chip brand">Upcoming</span> : <span className="chip muted">Past</span>}
+                {ev.status==='upcoming'?<span className="chip brand">Upcoming</span>:<span className="chip muted">Past</span>}
               </label>
             );
           })}
@@ -654,51 +667,54 @@ function RecordPaymentFlowModal({ state, setState, onClose, initialEventId }) {
         <div className="stack gap-4">
           <div style={{ padding:'10px 14px', background:'var(--brand-50)', borderRadius:'var(--r-md)', border:'1px solid var(--brand-200)' }}>
             <span style={{ fontWeight:600 }}>{event.title}</span>
-            <span className="muted" style={{ fontSize:13 }}> · {formatDateLong(event.date)} · ${event.price}{event.deposit ? ' ($' + event.deposit + ' deposit)' : ''}</span>
+            <span className="muted" style={{ fontSize:13 }}> · {formatDate(event.date)} · ${event.price}{event.deposit?' ($'+event.deposit+' deposit)':''} · {families.length} families assigned</span>
           </div>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-            <div className="section-h" style={{ marginBottom:0 }}>Families &amp; children attending</div>
+            <div className="section-h" style={{ marginBottom:0 }}>Select families &amp; children</div>
             <div className="row gap-2">
-              <button className="btn sm" onClick={() => setSelectedIds(eventPayments.filter(p => p.status !== 'fully-paid').map(p => p.id))}>All unpaid</button>
-              <button className="btn sm" onClick={() => setSelectedIds(eventPayments.map(p => p.id))}>All</button>
-              <button className="btn sm" onClick={() => setSelectedIds([])}>None</button>
+              <button className="btn sm" onClick={function(){setSelected(unpaidKeys.slice());}}>All unpaid</button>
+              <button className="btn sm" onClick={function(){setSelected(allChildKeys.slice());}}>All</button>
+              <button className="btn sm" onClick={function(){setSelected([]);}}>None</button>
             </div>
           </div>
-          {familyGroups.length === 0 ? (
-            <div className="muted" style={{ fontSize:14 }}>No payment records found for this event. Payments are created automatically when families are assigned to an event.</div>
+          {families.length === 0 ? (
+            <div className="muted" style={{ fontSize:14 }}>No families assigned to this event yet.</div>
           ) : (
             <div className="stack gap-3">
-              {familyGroups.map((group) => {
-                const par = group.parent;
-                const fps = group.childPayments;
-                const allSel = fps.length > 0 && fps.every(p => selectedSet.has(p.id));
-                const someSel = fps.some(p => selectedSet.has(p.id));
+              {families.map(function(fam) {
+                var par = fam.parent;
+                var kids = fam.children;
+                var famKeys = kids.map(function(c) { return makeKey(par.id, c.id); });
+                var allSel = famKeys.length > 0 && famKeys.every(function(k) { return selSet.has(k); });
+                var someSel = famKeys.some(function(k) { return selSet.has(k); });
                 return (
-                  <div key={par ? par.id : fps[0].parentId} style={{ border:'1px solid var(--border)', borderRadius:'var(--r-md)', overflow:'hidden' }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', background: allSel ? 'var(--brand-50)' : someSel ? 'var(--cream-50)' : 'var(--cream-50)' }}>
+                  <div key={par.id} style={{ border:'1px solid var(--border)', borderRadius:'var(--r-md)', overflow:'hidden' }}>
+                    <label style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', cursor:'pointer', background: allSel?'var(--brand-50)':'var(--cream-50)' }}>
                       <input type="checkbox" checked={allSel}
-                        ref={function(el) { if (el) el.indeterminate = someSel && !allSel; }}
-                        onChange={() => toggleFamily(fps)} style={{ cursor:'pointer' }} />
-                      <Avatar name={par ? par.name : fps[0].parentId} size="sm" />
+                        ref={function(el){ if(el) el.indeterminate = someSel && !allSel; }}
+                        onChange={function(){toggleFamily(fam);}} />
+                      <Avatar name={par.name} size="sm" />
                       <div style={{ flex:1 }}>
-                        <div style={{ fontWeight:600, fontSize:14 }}>{par ? par.name : fps[0].parentId}</div>
-                        <div className="muted" style={{ fontSize:12 }}>{fps.length} child{fps.length!==1?'ren':''} attending · {fps.filter(p=>p.status==='fully-paid').length} fully paid</div>
+                        <div style={{ fontWeight:600, fontSize:14 }}>{par.name}</div>
+                        <div className="muted" style={{ fontSize:12 }}>{kids.length} child{kids.length!==1?'ren':''} · {kids.filter(function(c){return c.payment&&c.payment.status==='fully-paid';}).length} fully paid</div>
                       </div>
-                    </div>
-                    {fps.map(p => {
-                      const child = par && par.children ? par.children.find(c => c.id === p.childId) : null;
-                      const dep = p.customDeposit != null ? p.customDeposit : (event.deposit || 0);
+                    </label>
+                    {kids.map(function(kid) {
+                      var key = makeKey(par.id, kid.id);
+                      var pmt = kid.payment;
+                      var dep = pmt && pmt.customDeposit!=null ? pmt.customDeposit : (event.deposit||0);
                       return (
-                        <div key={p.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 14px 8px 46px', background: selectedSet.has(p.id) ? 'var(--brand-50)' : 'white', borderTop:'1px solid var(--border)' }}>
-                          <input type="checkbox" checked={selectedSet.has(p.id)} onChange={() => toggleChild(p.id)} style={{ cursor:'pointer' }} />
+                        <label key={kid.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 14px 8px 46px', borderTop:'1px solid var(--border)', cursor:'pointer', background: selSet.has(key)?'var(--brand-50)':'white' }}>
+                          <input type="checkbox" checked={selSet.has(key)} onChange={function(){toggleChild(par.id, kid.id);}} />
                           <div style={{ flex:1 }}>
-                            <span style={{ fontSize:13, fontWeight:500 }}>{child ? child.name : p.childId}</span>
-                            {child && <span className="muted" style={{ fontSize:12 }}> · {child.patrol}</span>}
+                            <span style={{ fontSize:13, fontWeight:500 }}>{kid.name}</span>
+                            <span className="muted" style={{ fontSize:12 }}> · {kid.patrol}</span>
                           </div>
-                          {dep > 0 && <span className="muted" style={{ fontSize:11 }}>${dep} deposit{p.customDeposit!=null?' (custom)':''}</span>}
-                          <span className="muted" style={{ fontSize:11 }}>${p.paid}/${p.amount}</span>
-                          <StatusChip status={p.status} />
-                        </div>
+                          {dep > 0 && <span className="muted" style={{ fontSize:11 }}>${dep} deposit{pmt&&pmt.customDeposit!=null?' (custom)':''}</span>}
+                          {pmt
+                            ? <React.Fragment><span className="muted" style={{ fontSize:11 }}>${pmt.paid}/${pmt.amount}</span><StatusChip status={pmt.status} /></React.Fragment>
+                            : <span className="chip muted" style={{ fontSize:11 }}>No record yet</span>}
+                        </label>
                       );
                     })}
                   </div>
@@ -715,59 +731,56 @@ function RecordPaymentFlowModal({ state, setState, onClose, initialEventId }) {
             <span style={{ fontWeight:600 }}>{event.title}</span>
             <span className="muted" style={{ fontSize:13 }}> · {sel} child{sel!==1?'ren':''} selected</span>
           </div>
-
           <div>
             <div className="section-h">Amount to record</div>
             <div className="row gap-2" style={{ flexWrap:'wrap' }}>
-              {event.deposit > 0 && <button className={'btn sm ' + (mode==='deposit'?'primary':'')} onClick={() => setMode('deposit')}>Deposit per child</button>}
-              <button className={'btn sm ' + (mode==='full'?'primary':'')} onClick={() => setMode('full')}>Full remaining balance</button>
-              <button className={'btn sm ' + (mode==='custom'?'primary':'')} onClick={() => setMode('custom')}>Custom per child</button>
+              {event.deposit > 0 && <button className={'btn sm '+(mode==='deposit'?'primary':'')} onClick={function(){setMode('deposit');}}>Deposit per child</button>}
+              <button className={'btn sm '+(mode==='full'?'primary':'')} onClick={function(){setMode('full');}}>Full remaining balance</button>
+              <button className={'btn sm '+(mode==='custom'?'primary':'')} onClick={function(){setMode('custom');}}>Custom per child</button>
             </div>
-            {mode==='deposit' && event.deposit > 0 && <div className="muted" style={{ fontSize:13, marginTop:8 }}>Records the remaining deposit for each child (${event.deposit} default; custom per child where set).</div>}
+            {mode==='deposit'&&event.deposit>0&&<div className="muted" style={{ fontSize:13, marginTop:8 }}>Records the remaining deposit per child (${event.deposit} default).</div>}
           </div>
-
           <div>
             <div className="section-h">Payment method</div>
             <div className="row gap-2">
-              {['e-transfer','cash','cheque'].map(m => (
-                <button key={m} className={'btn sm ' + (method===m?'primary':'')} onClick={() => setMethod(m)}>{m}</button>
-              ))}
+              {['e-transfer','cash','cheque'].map(function(m) {
+                return <button key={m} className={'btn sm '+(method===m?'primary':'')} onClick={function(){setMethod(m);}}>{m}</button>;
+              })}
             </div>
           </div>
-
           <div>
-            <div className="section-h">Summary — {sel} child{sel!==1?'ren':''}</div>
+            <div className="section-h">Summary</div>
             <div className="stack gap-1">
-              {selectedIds.map(id => {
-                const p = eventPayments.find(x => x.id === id);
-                const par = p ? (state.parents.find(pa => pa.id === p.parentId) || null) : null;
-                const child = par && par.children ? par.children.find(c => c.id === (p ? p.childId : null)) : null;
-                const amt = getAmount(p);
+              {selected.map(function(key) {
+                var parts = key.split(':');
+                var pid = parts[0], cid = parts[1];
+                var fam = families.find(function(f){ return f.parent.id===pid; });
+                var par = fam ? fam.parent : null;
+                var kid = fam ? fam.children.find(function(c){ return c.id===cid; }) : null;
+                var pmt = kid ? kid.payment : null;
+                var amt = getAmount(pid, cid);
                 return (
-                  <div key={id} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 12px', borderRadius:'var(--r-md)', background:'var(--cream-50)', border:'1px solid var(--border)' }}>
-                    <Avatar name={par ? par.name : '?'} size="sm" />
+                  <div key={key} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 12px', borderRadius:'var(--r-md)', background:'var(--cream-50)', border:'1px solid var(--border)' }}>
+                    <Avatar name={par?par.name:'?'} size="sm" />
                     <div style={{ flex:1 }}>
-                      <span style={{ fontSize:13, fontWeight:600 }}>{par ? par.name : '?'}</span>
-                      <span style={{ fontSize:13 }}>{child ? ' · ' + child.name : ''}</span>
-                      {child && <span className="muted" style={{ fontSize:12 }}> ({child.patrol})</span>}
-                      <div className="muted" style={{ fontSize:11 }}>${p ? p.paid : 0} paid · ${p ? p.amount - p.paid : 0} remaining</div>
+                      <span style={{ fontSize:13, fontWeight:600 }}>{par?par.name:'?'}</span>
+                      {kid&&<span style={{ fontSize:13 }}> · {kid.name} <span className="muted">({kid.patrol})</span></span>}
+                      <div className="muted" style={{ fontSize:11 }}>{pmt?('$'+pmt.paid+' paid · $'+(pmt.amount-pmt.paid)+' remaining'):'New record will be created'}</div>
                     </div>
                     {mode==='custom' ? (
                       <input className="input num" type="number" min="0" style={{ width:80, padding:'4px 8px' }}
-                        value={customAmounts[id] != null ? customAmounts[id] : (p ? p.amount - p.paid : 0)}
-                        onChange={e => setCustomAmounts(function(a) { var n = Object.assign({}, a); n[id] = e.target.value; return n; })} />
+                        value={customAmounts[key]!=null?customAmounts[key]:(pmt?pmt.amount-pmt.paid:(event.price||0))}
+                        onChange={function(e){ var v=e.target.value; setCustomAmounts(function(a){ var n=Object.assign({},a); n[key]=v; return n; }); }} />
                     ) : (
-                      <span className="num" style={{ fontWeight:700, fontSize:15, color: amt > 0 ? 'var(--brand-700)' : 'var(--text-muted)' }}>
-                        {amt > 0 ? '+$' + amt : '—'}
-                      </span>
+                      <span className="num" style={{ fontWeight:700, fontSize:15, color: amt>0?'var(--brand-700)':'var(--text-muted)' }}>{amt>0?'+$'+amt:'—'}</span>
                     )}
                   </div>
                 );
               })}
             </div>
-            {mode !== 'custom' && totalToRecord > 0 && (
+            {mode!=='custom'&&totalToRecord>0&&(
               <div style={{ display:'flex', justifyContent:'flex-end', paddingTop:12, gap:8, alignItems:'center', borderTop:'1px solid var(--border)', marginTop:8 }}>
-                <span className="muted" style={{ fontSize:13 }}>Total to record:</span>
+                <span className="muted" style={{ fontSize:13 }}>Total:</span>
                 <span className="num" style={{ fontWeight:700, fontSize:18, color:'var(--brand-700)' }}>${totalToRecord}</span>
               </div>
             )}
