@@ -5,7 +5,11 @@ const PgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const db = require('./db');
+
+const FILES_DIR = process.env.FILES_DIR || '/files';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -235,6 +239,112 @@ app.delete('/api/users/:id', requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete user' });
   }
 });
+
+// ── File upload / download ────────────────────────────────────────────────────
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(FILES_DIR, 'events', req.params.eventId);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    // Prefix with timestamp to avoid collisions; keep original name
+    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, Date.now() + '_' + safe);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+});
+
+// Upload a file to an event
+app.post('/api/upload/:eventId', requireAdmin, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
+
+    const { eventId } = req.params;
+    const state = await db.getState();
+    const ev = state.events.find(e => e.id === eventId);
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+
+    const doc = {
+      id: 'd' + Math.random().toString(36).slice(2, 8),
+      name: req.file.originalname,
+      size: formatFileSize(req.file.size),
+      filename: req.file.filename,
+      eventId,
+      public: true,
+      uploadedAt: new Date().toISOString(),
+    };
+
+    ev.docs = ev.docs || [];
+    ev.docs.push(doc);
+    await db.setState(state);
+
+    res.json({ doc });
+  } catch (err) {
+    console.error('Upload error:', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// Download / serve a file
+app.get('/api/files/:eventId/:docId', requireAuth, async (req, res) => {
+  try {
+    const state = await db.getState();
+    const ev = state.events.find(e => e.id === req.params.eventId);
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+
+    const doc = (ev.docs || []).find(d => d.id === req.params.docId);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+    // Parents can only download public docs from events they are assigned to
+    if (req.session.userRole === 'parent') {
+      if (!ev.assigned.includes(req.session.userPersonId)) return res.status(403).json({ error: 'Not assigned' });
+      if (!doc.public) return res.status(403).json({ error: 'Internal document' });
+    }
+
+    const filePath = path.join(FILES_DIR, 'events', req.params.eventId, doc.filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
+
+    res.download(filePath, doc.name);
+  } catch (err) {
+    console.error('Download error:', err);
+    res.status(500).json({ error: 'Download failed' });
+  }
+});
+
+// Delete a document
+app.delete('/api/files/:eventId/:docId', requireAdmin, async (req, res) => {
+  try {
+    const state = await db.getState();
+    const ev = state.events.find(e => e.id === req.params.eventId);
+    if (!ev) return res.status(404).json({ error: 'Event not found' });
+
+    const doc = (ev.docs || []).find(d => d.id === req.params.docId);
+    if (doc?.filename) {
+      const filePath = path.join(FILES_DIR, 'events', req.params.eventId, doc.filename);
+      fs.rmSync(filePath, { force: true });
+    }
+
+    ev.docs = (ev.docs || []).filter(d => d.id !== req.params.docId);
+    await db.setState(state);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete file error:', err);
+    res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
 
 // ── SPA fallback ──────────────────────────────────────────────────────────────
 

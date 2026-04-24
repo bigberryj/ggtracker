@@ -73,17 +73,39 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
     toast('Message posted');
   };
 
+  const [uploading, setUploading] = useStateED(false);
+
   const toggleDocPublic = (docId) => {
     setState(s => ({ ...s, events: s.events.map(ev => ev.id !== eventId ? ev : { ...ev, docs: ev.docs.map(d => d.id === docId ? { ...d, public: !d.public } : d) }) }));
   };
-  const removeDoc = (docId) => {
-    setState(s => ({ ...s, events: s.events.map(ev => ev.id !== eventId ? ev : { ...ev, docs: ev.docs.filter(d => d.id !== docId) }) }));
+  const removeDoc = async (docId) => {
+    try {
+      const res = await fetch(`/api/files/${eventId}/${docId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      setState(s => ({ ...s, events: s.events.map(ev => ev.id !== eventId ? ev : { ...ev, docs: ev.docs.filter(d => d.id !== docId) }) }));
+      toast('Document deleted');
+    } catch (e) {
+      toast('Failed to delete document');
+    }
   };
-  const addDoc = () => {
-    const name = prompt('Document name (e.g. "Permission slip.pdf")');
-    if (!name) return;
-    setState(s => ({ ...s, events: s.events.map(ev => ev.id !== eventId ? ev : { ...ev, docs: [...ev.docs, { id: 'd'+Math.random().toString(36).slice(2,6), name, size: Math.floor(Math.random()*400+50)+' KB', public: true }] }) }));
-    toast('Document added');
+  const handleFileSelect = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/upload/${eventId}`, { method: 'POST', body: form });
+      if (!res.ok) throw new Error('Upload failed');
+      const { doc } = await res.json();
+      setState(s => ({ ...s, events: s.events.map(ev => ev.id !== eventId ? ev : { ...ev, docs: [...(ev.docs || []), doc] }) }));
+      toast('Document uploaded');
+    } catch (e) {
+      toast('Upload failed — please try again');
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
@@ -255,11 +277,14 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
         <div className="card flush">
           <div className="card-header">
             <h3>Documents</h3>
-            <button className="btn sm primary" onClick={addDoc}><IconUpload size={14} /> Upload</button>
+            <label className={`btn sm primary${uploading ? ' disabled' : ''}`} style={{ cursor: uploading ? 'not-allowed' : 'pointer' }}>
+              {uploading ? <React.Fragment><IconUpload size={14} /> Uploading…</React.Fragment> : <React.Fragment><IconUpload size={14} /> Upload</React.Fragment>}
+              <input type="file" style={{ display: 'none' }} onChange={handleFileSelect} disabled={uploading} />
+            </label>
           </div>
-          {event.docs.length === 0 ? (
+          {(event.docs || []).length === 0 ? (
             <div className="empty"><div className="icon-wrap"><IconFileText /></div><h3>No documents yet</h3><p>Upload permission slips, packing lists, or medical forms.</p></div>
-          ) : event.docs.map(d => (
+          ) : (event.docs || []).map(d => (
             <div key={d.id} className="doc-row">
               <div className="ic"><IconFileText size={16} /></div>
               <div className="grow">
@@ -268,7 +293,7 @@ function AdminEventDetail({ state, setState, eventId, navigate }) {
               </div>
               {d.public ? <span className="chip sage">Public</span> : <span className="chip muted">Internal</span>}
               <button className="btn sm" onClick={() => toggleDocPublic(d.id)}>{d.public ? 'Make internal' : 'Make public'}</button>
-              <button className="icon-btn"><IconDownload size={16} /></button>
+              <a className="icon-btn" href={`/api/files/${eventId}/${d.id}`} download={d.name} title="Download"><IconDownload size={16} /></a>
               <button className="icon-btn" onClick={() => removeDoc(d.id)}><IconTrash size={16} /></button>
             </div>
           ))}
